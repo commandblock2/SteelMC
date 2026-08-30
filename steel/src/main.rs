@@ -29,6 +29,9 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 #[cfg(feature = "jaeger")]
 use tracing_subscriber::{Layer, registry::LookupSpan};
 
+#[cfg(feature = "p00-fixture")]
+mod p00_fixture;
+
 #[cfg(feature = "jaeger")]
 fn init_jaeger<S>() -> impl Layer<S> + Send + Sync
 where
@@ -363,9 +366,18 @@ async fn run_server(
         });
     }
 
-    let mut steel = SteelServer::new(chunk_runtime.clone(), cancel_token.clone(), steel_config)
-        .await
-        .map_err(|e| e.to_string())?;
+    #[cfg(feature = "p00-fixture")]
+    let server_result = SteelServer::new_with_commands(
+        chunk_runtime.clone(),
+        cancel_token.clone(),
+        steel_config,
+        p00_fixture::command_registry().map_err(|error| error.to_string())?,
+    )
+    .await;
+    #[cfg(not(feature = "p00-fixture"))]
+    let server_result =
+        SteelServer::new(chunk_runtime.clone(), cancel_token.clone(), steel_config).await;
+    let mut steel = server_result.map_err(|e| e.to_string())?;
 
     let server = steel.server.clone();
 
