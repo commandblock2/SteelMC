@@ -18,13 +18,12 @@ const MAX_ORIGIN_X: i32 = 29_999_996;
 const MIN_BUILD_HEIGHT: i32 = -64;
 const MAX_BUILD_HEIGHT: i32 = 319;
 
-pub(super) fn command_registry() -> Result<CommandRegistry, CommandRegistrationError> {
-    let mut registry = CommandRegistry::new();
+pub(super) fn register(registry: &mut CommandRegistry) -> Result<(), CommandRegistrationError> {
     registry.register(CommandRegistration::new(
         Identifier::from_steel("p00_fixture"),
         command,
     ))?;
-    Ok(registry)
+    Ok(())
 }
 
 fn command() -> CommandNode {

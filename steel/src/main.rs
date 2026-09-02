@@ -14,6 +14,8 @@ use futures::FutureExt;
 use steel::config::{self, LogConfig};
 use steel::logger::CommandLogger;
 use steel::{SERVER, SteelServer, logger::LoggerLayer};
+#[cfg(any(feature = "p00-fixture", feature = "p01-parity"))]
+use steel_core::command::CommandRegistry;
 use steel_core::player::player_data::PersistentPlayerData;
 use steel_core::player::player_data_storage::GlobalPlayerData;
 use steel_core::player::player_inventory::MenuRemovalStatus;
@@ -31,6 +33,8 @@ use tracing_subscriber::{Layer, registry::LookupSpan};
 
 #[cfg(feature = "p00-fixture")]
 mod p00_fixture;
+#[cfg(feature = "p01-parity")]
+mod p01_parity;
 
 #[cfg(feature = "jaeger")]
 fn init_jaeger<S>() -> impl Layer<S> + Send + Sync
@@ -366,15 +370,24 @@ async fn run_server(
         });
     }
 
-    #[cfg(feature = "p00-fixture")]
+    #[cfg(any(feature = "p00-fixture", feature = "p01-parity"))]
+    let command_registry = {
+        let mut registry = CommandRegistry::new();
+        #[cfg(feature = "p00-fixture")]
+        p00_fixture::register(&mut registry).map_err(|error| error.to_string())?;
+        #[cfg(feature = "p01-parity")]
+        p01_parity::register(&mut registry).map_err(|error| error.to_string())?;
+        registry
+    };
+    #[cfg(any(feature = "p00-fixture", feature = "p01-parity"))]
     let server_result = SteelServer::new_with_commands(
         chunk_runtime.clone(),
         cancel_token.clone(),
         steel_config,
-        p00_fixture::command_registry().map_err(|error| error.to_string())?,
+        command_registry,
     )
     .await;
-    #[cfg(not(feature = "p00-fixture"))]
+    #[cfg(not(any(feature = "p00-fixture", feature = "p01-parity")))]
     let server_result =
         SteelServer::new(chunk_runtime.clone(), cancel_token.clone(), steel_config).await;
     let mut steel = server_result.map_err(|e| e.to_string())?;

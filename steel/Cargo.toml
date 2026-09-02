@@ -50,17 +50,17 @@ mimalloc = { version = "0.1.52", optional = true }
 dhat = { version = "0.3.3", optional = true }
 strip-ansi-escapes = "0.2.1"
 steel-registry = { version = "0.15.2", path = "../steel-registry" }
+serde_json.workspace = true
+rustc-hash.workspace = true
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [features]
 default = ["mimalloc"]
 stand-alone = []
 p00-fixture = []
+p01-parity = []
 deadlock_detection = ["dep:parking_lot"]
 dhat-heap = ["dhat"]
 mimalloc = ["dep:mimalloc"]
