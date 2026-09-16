@@ -11,6 +11,7 @@ use steel_core::command::{
     CommandArgument, CommandContext, CommandError, CommandNode, CommandRegistration,
     CommandRegistrationError, CommandRegistry, argument, literal,
 };
+use steel_core::player::Player;
 use steel_core::world::World;
 use steel_registry::blocks::properties::{Direction, Half, SlabType, StairsShape};
 use steel_registry::blocks::{block_state_ext::BlockStateExt, properties::BlockStateProperties};
@@ -29,6 +30,10 @@ const MAX_CLEAR_BLOCKS: u64 = 20_000;
 pub(super) fn register(registry: &mut CommandRegistry) -> Result<(), CommandRegistrationError> {
     registry.register(
         CommandRegistration::new(Identifier::from_steel("p01_materialize"), command)
+            .default_access(),
+    )?;
+    registry.register(
+        CommandRegistration::new(Identifier::from_steel("p01_clear"), clear_command)
             .default_access(),
     )?;
     Ok(())
@@ -63,7 +68,11 @@ fn command() -> CommandNode {
                     .then(
                         argument("yaw", CommandArgument::float(-180.0, 180.0)).then(
                             argument("pitch", CommandArgument::float(-90.0, 90.0))
-                                .executes(materialize),
+                                .executes(materialize_source)
+                                .then(
+                                    argument("target", CommandArgument::player())
+                                        .executes(materialize_target),
+                                ),
                         ),
                     ),
                 ),
@@ -72,26 +81,75 @@ fn command() -> CommandNode {
     )
 }
 
+fn clear_command() -> CommandNode {
+    literal("p01_clear")
+        .then(argument("file", CommandArgument::string()).executes(clear_materialization))
+}
+
+fn read_request(context: &CommandContext<'_>) -> Result<MaterializationRequest, CommandError> {
+    let file = required_string(*context, "file")?;
+    serde_json::from_str(
+        &fs::read_to_string(file).map_err(|error| {
+            CommandError::new(format!("cannot read P01 plan {file:?}: {error}"))
+        })?,
+    )
+    .map_err(|error| CommandError::new(format!("cannot parse P01 plan {file:?}: {error}")))
+}
+
+fn clear_materialization(context: &CommandContext<'_>) -> Result<i32, CommandError> {
+    let request = read_request(context)?;
+    request.validate()?;
+    let cleared_blocks = clear_region(
+        context.source().world(),
+        request.clear_min,
+        request.clear_max,
+    )?;
+    context.source().send_success(
+        &TextComponent::plain(format!(
+            "P01 cleared {cleared_blocks} non-air blocks in {:?}..{:?}",
+            request.clear_min, request.clear_max
+        )),
+        false,
+    );
+    log::info!(
+        "P01 clear completed: cleared_non_air={} min={:?} max={:?}",
+        cleared_blocks,
+        request.clear_min,
+        request.clear_max
+    );
+    i32::try_from(cleared_blocks)
+        .map_err(|_| CommandError::new("P01 cleared block count does not fit command result"))
+}
+
 #[expect(
     clippy::trivially_copy_pass_by_ref,
     reason = "Steel's command callback API passes a borrowed context"
 )]
-fn materialize(context: &CommandContext<'_>) -> Result<i32, CommandError> {
-    let file = required_string(*context, "file")?;
+fn materialize_source(context: &CommandContext<'_>) -> Result<i32, CommandError> {
+    let player = context
+        .source()
+        .player()
+        .cloned()
+        .ok_or_else(|| CommandError::new("P01 materialization requires a player source"))?;
+    materialize(context, player)
+}
+
+fn materialize_target(context: &CommandContext<'_>) -> Result<i32, CommandError> {
+    let player = context.player("target")?;
+    materialize(context, player)
+}
+
+fn materialize(context: &CommandContext<'_>, player: Arc<Player>) -> Result<i32, CommandError> {
     let target_x = required_double(*context, "x")?;
     let target_y = required_double(*context, "y")?;
     let target_z = required_double(*context, "z")?;
     let yaw = required_float(*context, "yaw")?;
     let pitch = required_float(*context, "pitch")?;
-    let request: MaterializationRequest =
-        serde_json::from_str(&fs::read_to_string(file).map_err(|error| {
-            CommandError::new(format!("cannot read P01 plan {file:?}: {error}"))
-        })?)
-        .map_err(|error| CommandError::new(format!("cannot parse P01 plan {file:?}: {error}")))?;
+    let request = read_request(context)?;
     request.validate()?;
 
     let world = context.source().world();
-    clear_region(world, request.clear_min, request.clear_max)?;
+    let cleared_blocks = clear_region(world, request.clear_min, request.clear_max)?;
     for block in &request.blocks {
         let position = BlockPos::new(block.position.x, block.position.y, block.position.z);
         if !set_block(world, position, block.block.state()) {
@@ -101,10 +159,6 @@ fn materialize(context: &CommandContext<'_>) -> Result<i32, CommandError> {
         }
     }
 
-    let player = context
-        .source()
-        .player()
-        .ok_or_else(|| CommandError::new("P01 materialization requires a player source"))?;
     let mut target = context.source().position();
     target.x = target_x;
     target.y = target_y;
@@ -115,9 +169,11 @@ fn materialize(context: &CommandContext<'_>) -> Result<i32, CommandError> {
 
     context.source().send_success(
         &TextComponent::plain(format!(
-            "P01 materialized {} blocks from seed {}",
+            "P01 materialized {} blocks from seed {} after clearing {} non-air blocks for {}",
             request.blocks.len(),
-            request.seed
+            request.seed,
+            cleared_blocks,
+            player.gameprofile.name,
         )),
         false,
     );
@@ -129,12 +185,16 @@ fn clear_region(
     world: &Arc<World>,
     min: PlanPosition,
     max: PlanPosition,
-) -> Result<(), CommandError> {
+) -> Result<u64, CommandError> {
     let air = vanilla_blocks::AIR.default_state();
+    let mut cleared_blocks = 0;
     for y in min.y..=max.y {
         for x in min.x..=max.x {
             for z in min.z..=max.z {
                 let position = BlockPos::new(x, y, z);
+                if !world.get_block_state(position).is_air() {
+                    cleared_blocks += 1;
+                }
                 if !set_block(world, position, air) {
                     return Err(CommandError::new(format!(
                         "P01 clear position {position:?} is unavailable"
@@ -143,7 +203,7 @@ fn clear_region(
             }
         }
     }
-    Ok(())
+    Ok(cleared_blocks)
 }
 
 fn set_block(world: &Arc<World>, position: BlockPos, state: BlockStateId) -> bool {
