@@ -32,6 +32,7 @@ pub mod banner_pattern;
 pub mod biome;
 pub mod block_entity_type;
 pub mod blocks;
+pub mod block_state_descriptor;
 pub mod carver;
 pub mod cat_sound_variant;
 pub mod cat_variant;

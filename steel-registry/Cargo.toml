@@ -8,6 +8,7 @@ build = "build/build.rs"
 
 [dependencies]
 # Internal crates
+parkour_bot_azalea = { path = "../.." }
 steel-utils.workspace = true
 
 # UUID
@@ -54,6 +55,15 @@ heck.workspace = true
 # NBT parsing for structure templates
 simdnbt.workspace = true
 flate2.workspace = true
+
+[dev-dependencies]
+azalea = {
+    git = "https://github.com/commandblock2/azalea.git",
+    rev = "c35b57ebf82fa8b26ada77ab9eb795e3827d6c16",
+    version = "0.16.0",
+    default-features = false,
+    features = ["serde"],
+}
 
 [features]
 fmt = []
