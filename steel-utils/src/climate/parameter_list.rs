@@ -93,8 +93,7 @@ fn build_tree(entries: &mut [BuildEntry]) -> RTreeNode {
         // Sort by total magnitude of centers across all dimensions
         entries.sort_by_key(|e| {
             let mut total: i64 = 0;
-            for d in 0..PARAMETER_COUNT {
-                let p = &e.parameter_space[d];
+            for p in &e.parameter_space {
                 total += ((p.min + p.max) / 2).abs();
             }
             total
@@ -142,9 +141,8 @@ fn build_tree(entries: &mut [BuildEntry]) -> RTreeNode {
         .map(|bucket_entries| {
             let mut bounds: [Option<Parameter>; PARAMETER_COUNT] = [None; PARAMETER_COUNT];
             for e in &bucket_entries {
-                #[expect(clippy::needless_range_loop, reason = "dim indexes parallel arrays")]
-                for dim in 0..PARAMETER_COUNT {
-                    bounds[dim] = Some(e.parameter_space[dim].span_with(bounds[dim].as_ref()));
+                for (bound, parameter) in bounds.iter_mut().zip(e.parameter_space.iter()) {
+                    *bound = Some(parameter.span_with(bound.as_ref()));
                 }
             }
             let ps = bounds.map(|b| b.expect("bounds should be initialized"));
@@ -214,10 +212,6 @@ fn expected_children_count(total: usize) -> usize {
 /// This matches vanilla's `bucketize()` which creates `SubTree` objects that
 /// capture the children's current sorted order. We return cloned entries so
 /// that later sorts of the original slice don't affect the saved buckets.
-#[expect(
-    clippy::needless_range_loop,
-    reason = "indexing into PARAMETER_COUNT parallel arrays; iterator would be less clear"
-)]
 fn snapshot_buckets(entries: &[BuildEntry]) -> (i64, Vec<Vec<BuildEntry>>) {
     let expected = expected_children_count(entries.len());
     let mut buckets = Vec::new();
@@ -229,8 +223,8 @@ fn snapshot_buckets(entries: &[BuildEntry]) -> (i64, Vec<Vec<BuildEntry>>) {
         // Compute bounding box cost for this bucket
         let mut bounds: [Option<Parameter>; PARAMETER_COUNT] = [None; PARAMETER_COUNT];
         for e in &bucket {
-            for d in 0..PARAMETER_COUNT {
-                bounds[d] = Some(e.parameter_space[d].span_with(bounds[d].as_ref()));
+            for (bound, parameter) in bounds.iter_mut().zip(e.parameter_space.iter()) {
+                *bound = Some(parameter.span_with(bound.as_ref()));
             }
         }
         let ps = bounds.map(|b| b.expect("bounds should be initialized"));
@@ -267,16 +261,10 @@ impl FlatNode {
     /// Uses branchless `max` operations (compiles to `cmov`) to avoid branch
     /// mispredictions in the hot inner loop.
     #[inline]
-    #[expect(
-        clippy::needless_range_loop,
-        reason = "indexing into parallel min/max arrays; iterator zip would be less clear"
-    )]
     fn distance(&self, target: &[i64; PARAMETER_COUNT]) -> i64 {
         let mut d = 0i64;
-        for i in 0..PARAMETER_COUNT {
-            let di = (target[i] - self.maxs[i])
-                .max(self.mins[i] - target[i])
-                .max(0);
+        for ((target, min), max) in target.iter().zip(self.mins).zip(self.maxs) {
+            let di = (*target - max).max(min - *target).max(0);
             d += di * di;
         }
         d

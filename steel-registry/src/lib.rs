@@ -19,9 +19,13 @@
     clippy::unused_self,
     reason = "registry model code mirrors vanilla/generated data and keeps existing panic-heavy registry invariants"
 )]
+#![allow(
+    clippy::assert_is_empty,
+    reason = "registry tests preserve direct empty-state assertions"
+)]
 #![cfg_attr(
     test,
-    expect(
+    allow(
         clippy::float_cmp,
         reason = "registry tests compare exact extracted floating-point constants"
     )
@@ -32,7 +36,6 @@ pub mod banner_pattern;
 pub mod biome;
 pub mod block_entity_type;
 pub mod blocks;
-pub mod block_state_descriptor;
 pub mod carver;
 pub mod cat_sound_variant;
 pub mod cat_variant;
