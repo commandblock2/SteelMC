@@ -14,7 +14,11 @@ use futures::FutureExt;
 use steel::config::{self, LogConfig};
 use steel::logger::CommandLogger;
 use steel::{SERVER, SteelServer, logger::LoggerLayer};
-#[cfg(any(feature = "p00-fixture", feature = "p01-parity"))]
+#[cfg(any(
+    feature = "p00-fixture",
+    feature = "p01-parity",
+    feature = "v2-flat-navigation"
+))]
 use steel_core::command::CommandRegistry;
 use steel_core::player::player_data::PersistentPlayerData;
 use steel_core::player::player_data_storage::GlobalPlayerData;
@@ -35,6 +39,8 @@ use tracing_subscriber::{Layer, registry::LookupSpan};
 mod p00_fixture;
 #[cfg(feature = "p01-parity")]
 mod p01_parity;
+#[cfg(feature = "v2-flat-navigation")]
+mod v2_flat_navigation;
 
 #[cfg(feature = "jaeger")]
 fn init_jaeger<S>() -> impl Layer<S> + Send + Sync
@@ -370,16 +376,26 @@ async fn run_server(
         });
     }
 
-    #[cfg(any(feature = "p00-fixture", feature = "p01-parity"))]
+    #[cfg(any(
+        feature = "p00-fixture",
+        feature = "p01-parity",
+        feature = "v2-flat-navigation"
+    ))]
     let command_registry = {
         let mut registry = CommandRegistry::new();
         #[cfg(feature = "p00-fixture")]
         p00_fixture::register(&mut registry).map_err(|error| error.to_string())?;
         #[cfg(feature = "p01-parity")]
         p01_parity::register(&mut registry).map_err(|error| error.to_string())?;
+        #[cfg(feature = "v2-flat-navigation")]
+        v2_flat_navigation::register(&mut registry).map_err(|error| error.to_string())?;
         registry
     };
-    #[cfg(any(feature = "p00-fixture", feature = "p01-parity"))]
+    #[cfg(any(
+        feature = "p00-fixture",
+        feature = "p01-parity",
+        feature = "v2-flat-navigation"
+    ))]
     let server_result = SteelServer::new_with_commands(
         chunk_runtime.clone(),
         cancel_token.clone(),
@@ -387,7 +403,11 @@ async fn run_server(
         command_registry,
     )
     .await;
-    #[cfg(not(any(feature = "p00-fixture", feature = "p01-parity")))]
+    #[cfg(not(any(
+        feature = "p00-fixture",
+        feature = "p01-parity",
+        feature = "v2-flat-navigation"
+    )))]
     let server_result =
         SteelServer::new(chunk_runtime.clone(), cancel_token.clone(), steel_config).await;
     let mut steel = server_result.map_err(|e| e.to_string())?;
