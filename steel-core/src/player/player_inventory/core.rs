@@ -201,8 +201,8 @@ impl PlayerInventory {
     /// Finds the first empty slot in the inventory, or -1 if full.
     #[must_use]
     pub fn get_free_slot(&self) -> i32 {
-        for i in 0..Self::INVENTORY_SIZE {
-            if self.items[i].is_empty() {
+        for (i, item) in self.items.iter().take(Self::INVENTORY_SIZE).enumerate() {
+            if item.is_empty() {
                 return i as i32;
             }
         }
@@ -213,8 +213,8 @@ impl PlayerInventory {
     /// Returns -1 if not found.
     #[must_use]
     pub fn find_slot_matching_item(&self, stack: &ItemStack) -> i32 {
-        for i in 0..Self::INVENTORY_SIZE {
-            if !self.items[i].is_empty() && ItemStack::is_same_item(&self.items[i], stack) {
+        for (i, item) in self.items.iter().take(Self::INVENTORY_SIZE).enumerate() {
+            if !item.is_empty() && ItemStack::is_same_item(item, stack) {
                 return i as i32;
             }
         }
