@@ -53,6 +53,9 @@ steel-registry = { version = "0.15.2", path = "../steel-registry" }
 serde_json.workspace = true
 rustc-hash.workspace = true
 
+[dev-dependencies]
+steel-registry = { workspace = true, features = ["test-utils"] }
+
 [lints]
 workspace = true
 
@@ -61,6 +64,7 @@ default = ["mimalloc"]
 stand-alone = []
 p00-fixture = []
 p01-parity = []
+v2-flat-navigation = []
 deadlock_detection = ["dep:parking_lot"]
 dhat-heap = ["dhat"]
 mimalloc = ["dep:mimalloc"]
