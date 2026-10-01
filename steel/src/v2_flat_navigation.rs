@@ -6,6 +6,7 @@
 
 use std::{fs, str::FromStr, sync::Arc};
 
+use glam::DVec3;
 use rustc_hash::FxHashSet;
 use steel_core::command::{
     CommandArgument, CommandContext, CommandError, CommandNode, CommandRegistration,
@@ -15,15 +16,20 @@ use steel_core::{entity::Entity, world::World};
 use steel_registry::{
     REGISTRY, RegistryExt, blocks::block_state_ext::BlockStateExt, vanilla_blocks,
 };
+use steel_registry::{particle_type::ParticleData, vanilla_particle_types};
 use steel_utils::{BlockPos, BlockStateId, ChunkPos, Identifier, types::UpdateFlags};
 use text_components::TextComponent;
 
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 const MAX_CLEAR_BLOCKS: u64 = 20_000;
 const MIN_BUILD_HEIGHT: i32 = -64;
 const MAX_BUILD_HEIGHT: i32 = 319;
 const MIN_HORIZONTAL_POSITION: i32 = -29_999_999;
 const MAX_HORIZONTAL_POSITION: i32 = 29_999_999;
+const GOAL_MARKER_HALF_HEIGHT: f64 = 6.0;
+const GOAL_MARKER_HORIZONTAL_SPREAD: f64 = 0.08;
+const GOAL_MARKER_VERTICAL_SPREAD: f64 = 5.5;
+const GOAL_MARKER_PARTICLE_COUNT: i32 = 32;
 
 pub(super) fn register(registry: &mut CommandRegistry) -> Result<(), CommandRegistrationError> {
     registry.register(
@@ -33,12 +39,83 @@ pub(super) fn register(registry: &mut CommandRegistry) -> Result<(), CommandRegi
         )
         .default_access(),
     )?;
+    registry.register(
+        CommandRegistration::new(
+            Identifier::from_steel("v2_flat_navigation_goal_marker"),
+            goal_marker_command,
+        )
+        .default_access(),
+    )?;
     Ok(())
 }
 
 fn command() -> CommandNode {
     literal("v2_flat_navigation_materialize")
         .then(argument("file", CommandArgument::greedy_string()).executes(materialize))
+}
+
+fn goal_marker_command() -> CommandNode {
+    literal("v2_flat_navigation_goal_marker").then(
+        argument(
+            "x",
+            CommandArgument::double(
+                f64::from(MIN_HORIZONTAL_POSITION),
+                f64::from(MAX_HORIZONTAL_POSITION),
+            ),
+        )
+        .then(
+            argument(
+                "y",
+                CommandArgument::double(f64::from(MIN_BUILD_HEIGHT), f64::from(MAX_BUILD_HEIGHT)),
+            )
+            .then(
+                argument(
+                    "z",
+                    CommandArgument::double(
+                        f64::from(MIN_HORIZONTAL_POSITION),
+                        f64::from(MAX_HORIZONTAL_POSITION),
+                    ),
+                )
+                .executes(emit_goal_marker),
+            ),
+        ),
+    )
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "Steel's command callback API passes a borrowed context"
+)]
+fn emit_goal_marker(context: &CommandContext<'_>) -> Result<i32, CommandError> {
+    let marker = PlanGoalMarker {
+        x: required_double(*context, "x")?,
+        y: required_double(*context, "y")?,
+        z: required_double(*context, "z")?,
+    };
+    validate_goal_marker_coordinates(marker)?;
+    Ok(broadcast_goal_marker(context.source().world(), marker))
+}
+
+fn broadcast_goal_marker(world: &Arc<World>, marker: PlanGoalMarker) -> i32 {
+    world.send_particles_with_options(
+        ParticleData::simple(&vanilla_particle_types::END_ROD),
+        false,
+        true,
+        DVec3::new(marker.x, marker.y + GOAL_MARKER_HALF_HEIGHT, marker.z),
+        GOAL_MARKER_PARTICLE_COUNT,
+        DVec3::new(
+            GOAL_MARKER_HORIZONTAL_SPREAD,
+            GOAL_MARKER_VERTICAL_SPREAD,
+            GOAL_MARKER_HORIZONTAL_SPREAD,
+        ),
+        0.0,
+    )
+}
+
+fn required_double(context: CommandContext<'_>, name: &str) -> Result<f64, CommandError> {
+    context
+        .double(name)
+        .ok_or_else(|| CommandError::new(format!("missing double argument '{name}'")))
 }
 
 #[expect(
@@ -76,6 +153,10 @@ fn materialize(context: &CommandContext<'_>) -> Result<i32, CommandError> {
     // regular teleport path clears velocity, while this explicit ground flag
     // also makes the server-side state deterministic before the next tick.
     player.set_on_ground(true);
+
+    if let Some(marker) = request.goal_marker {
+        broadcast_goal_marker(world, marker);
+    }
 
     context.source().send_success(
         &TextComponent::plain(format!(
@@ -143,6 +224,7 @@ struct MaterializationRequest {
     clear_max: PlanPosition,
     start: PlanStart,
     blocks: Vec<MaterializationBlock>,
+    goal_marker: Option<PlanGoalMarker>,
 }
 
 impl MaterializationRequest {
@@ -157,6 +239,9 @@ impl MaterializationRequest {
             return Err(CommandError::new("V2 materialization task id is empty"));
         }
         validate_bounds(self.clear_min, self.clear_max)?;
+        if let Some(marker) = self.goal_marker {
+            validate_goal_marker(marker, self.clear_min, self.clear_max)?;
+        }
         if region_volume(self.clear_min, self.clear_max)? > MAX_CLEAR_BLOCKS {
             return Err(CommandError::new(format!(
                 "V2 clear region exceeds the {MAX_CLEAR_BLOCKS}-block development limit"
@@ -211,6 +296,54 @@ struct PlanStart {
     z: f64,
     yaw: f32,
     pitch: f32,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+struct PlanGoalMarker {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+fn validate_goal_marker(
+    marker: PlanGoalMarker,
+    clear_min: PlanPosition,
+    clear_max: PlanPosition,
+) -> Result<(), CommandError> {
+    validate_goal_marker_coordinates(marker)?;
+
+    let anchor = PlanPosition {
+        x: marker.x.floor() as i32,
+        y: marker.y.floor() as i32,
+        z: marker.z.floor() as i32,
+    };
+    if !contains(clear_min, clear_max, anchor) {
+        return Err(CommandError::new(
+            "V2 goal marker lies outside the task clear region",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_goal_marker_coordinates(marker: PlanGoalMarker) -> Result<(), CommandError> {
+    if !marker.x.is_finite()
+        || !marker.y.is_finite()
+        || !marker.z.is_finite()
+        || marker.x < f64::from(MIN_HORIZONTAL_POSITION)
+        || marker.x > f64::from(MAX_HORIZONTAL_POSITION)
+        || marker.y < f64::from(MIN_BUILD_HEIGHT)
+        || marker.y + GOAL_MARKER_HALF_HEIGHT + GOAL_MARKER_VERTICAL_SPREAD
+            > f64::from(MAX_BUILD_HEIGHT)
+        || marker.y + GOAL_MARKER_HALF_HEIGHT - GOAL_MARKER_VERTICAL_SPREAD
+            < f64::from(MIN_BUILD_HEIGHT)
+        || marker.z < f64::from(MIN_HORIZONTAL_POSITION)
+        || marker.z > f64::from(MAX_HORIZONTAL_POSITION)
+    {
+        return Err(CommandError::new(
+            "V2 goal marker lies outside Minecraft bounds",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_start(start: PlanStart) -> Result<(), CommandError> {
@@ -359,6 +492,7 @@ mod tests {
                 position: PlanPosition { x: 0, y: 0, z: 0 },
                 state: "minecraft:stone".to_owned(),
             }],
+            goal_marker: None,
         }
     }
 
@@ -381,6 +515,17 @@ mod tests {
             y: 100,
             z: 100,
         };
+        assert!(request.validate_and_resolve().is_err());
+    }
+
+    #[test]
+    fn rejects_goal_markers_outside_the_task_clear_region() {
+        let mut request = request();
+        request.goal_marker = Some(PlanGoalMarker {
+            x: 2.5,
+            y: 1.0,
+            z: 0.5,
+        });
         assert!(request.validate_and_resolve().is_err());
     }
 }

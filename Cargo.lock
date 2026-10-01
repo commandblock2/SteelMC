@@ -2680,6 +2680,7 @@ dependencies = [
  "crossterm",
  "dhat",
  "futures",
+ "glam",
  "log",
  "mimalloc",
  "opentelemetry",
