@@ -12,7 +12,11 @@ use steel_core::command::{
     CommandArgument, CommandContext, CommandError, CommandNode, CommandRegistration,
     CommandRegistrationError, CommandRegistry, argument, literal,
 };
-use steel_core::{entity::Entity, world::World};
+use steel_core::{
+    entity::{Entity, LivingEntity},
+    player::{Player, food_data::FoodData},
+    world::World,
+};
 use steel_registry::{
     REGISTRY, RegistryExt, blocks::block_state_ext::BlockStateExt, vanilla_blocks,
 };
@@ -41,6 +45,13 @@ pub(super) fn register(registry: &mut CommandRegistry) -> Result<(), CommandRegi
     )?;
     registry.register(
         CommandRegistration::new(
+            Identifier::from_steel("v2_flat_navigation_prepare"),
+            prepare_command,
+        )
+        .default_access(),
+    )?;
+    registry.register(
+        CommandRegistration::new(
             Identifier::from_steel("v2_flat_navigation_goal_marker"),
             goal_marker_command,
         )
@@ -52,6 +63,47 @@ pub(super) fn register(registry: &mut CommandRegistry) -> Result<(), CommandRegi
 fn command() -> CommandNode {
     literal("v2_flat_navigation_materialize")
         .then(argument("file", CommandArgument::greedy_string()).executes(materialize))
+}
+
+fn prepare_command() -> CommandNode {
+    literal("v2_flat_navigation_prepare")
+        .then(argument("file", CommandArgument::greedy_string()).executes(prepare))
+}
+
+/// Move the requesting client close enough to load a remote preview plot.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "Steel's command callback API passes a borrowed context"
+)]
+fn prepare(context: &CommandContext<'_>) -> Result<i32, CommandError> {
+    let player = context
+        .source()
+        .player()
+        .ok_or_else(|| CommandError::new("V2 preparation requires a player source"))?;
+    let request = read_request(required_string(*context, "file")?)?;
+    request.validate_and_resolve()?;
+    approach_plot(player, &request)?;
+    context.source().send_success(
+        &TextComponent::plain(format!(
+            "V2_FLAT_NAVIGATION_PREPARED task_id={}",
+            request.task_id
+        )),
+        false,
+    );
+    Ok(1)
+}
+
+fn approach_plot(player: &Player, request: &MaterializationRequest) -> Result<(), CommandError> {
+    let target = DVec3::new(
+        request.start.x,
+        f64::from((request.clear_max.y + 1).min(MAX_BUILD_HEIGHT)),
+        request.start.z,
+    );
+    player
+        .teleport(target, request.start.yaw, request.start.pitch)
+        .map_err(|error| CommandError::new(format!("cannot approach V2 plot: {error}")))?;
+    player.reset_fall_distance();
+    Ok(())
 }
 
 fn goal_marker_command() -> CommandNode {
@@ -133,6 +185,17 @@ fn materialize(context: &CommandContext<'_>) -> Result<i32, CommandError> {
     let blocks = request.validate_and_resolve()?;
 
     let world = context.source().world();
+    if !clear_chunks_ready(world, request.clear_min, request.clear_max) {
+        approach_plot(&player, &request)?;
+        context.source().send_success(
+            &TextComponent::plain(format!(
+                "V2_FLAT_NAVIGATION_PLOT_NOT_READY task_id={}",
+                request.task_id
+            )),
+            false,
+        );
+        return Ok(0);
+    }
     let cleared_blocks = clear_region(world, request.clear_min, request.clear_max)?;
     for (position, state) in &blocks {
         if !set_block(world, *position, *state) {
@@ -149,9 +212,10 @@ fn materialize(context: &CommandContext<'_>) -> Result<i32, CommandError> {
     player
         .teleport(target, request.start.yaw, request.start.pitch)
         .map_err(|error| CommandError::new(format!("cannot teleport V2 player: {error}")))?;
-    // The reset contract starts on the platform with no carried movement. The
-    // regular teleport path clears velocity, while this explicit ground flag
-    // also makes the server-side state deterministic before the next tick.
+    // Reset health, hunger, and movement state between independent episodes.
+    player.reset_fall_distance();
+    player.set_health(player.get_max_health());
+    *player.food_data.lock() = FoodData::new();
     player.set_on_ground(true);
 
     if let Some(marker) = request.goal_marker {
@@ -177,6 +241,19 @@ fn read_request(file: &str) -> Result<MaterializationRequest, CommandError> {
         ))
     })?)
     .map_err(|error| CommandError::new(format!("cannot parse V2 materialization plan: {error}")))
+}
+
+fn clear_chunks_ready(world: &World, min: PlanPosition, max: PlanPosition) -> bool {
+    let min_chunk = ChunkPos::from_block_pos(BlockPos::new(min.x, min.y, min.z));
+    let max_chunk = ChunkPos::from_block_pos(BlockPos::new(max.x, max.y, max.z));
+    (min_chunk.0.x..=max_chunk.0.x).all(|x| {
+        (min_chunk.0.y..=max_chunk.0.y).all(|z| {
+            world
+                .chunk_map
+                .with_full_chunk(ChunkPos::new(x, z), |_| ())
+                .is_some()
+        })
+    })
 }
 
 fn clear_region(
