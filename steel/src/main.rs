@@ -40,7 +40,7 @@ mod p00_fixture;
 #[cfg(feature = "p01-parity")]
 mod p01_parity;
 #[cfg(feature = "v2-flat-navigation")]
-mod v2_flat_navigation;
+mod v2_episode;
 
 #[cfg(feature = "jaeger")]
 fn init_jaeger<S>() -> impl Layer<S> + Send + Sync
@@ -388,7 +388,7 @@ async fn run_server(
         #[cfg(feature = "p01-parity")]
         p01_parity::register(&mut registry).map_err(|error| error.to_string())?;
         #[cfg(feature = "v2-flat-navigation")]
-        v2_flat_navigation::register(&mut registry).map_err(|error| error.to_string())?;
+        v2_episode::register(&mut registry).map_err(|error| error.to_string())?;
         registry
     };
     #[cfg(any(

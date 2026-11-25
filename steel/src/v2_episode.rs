@@ -1,4 +1,4 @@
-//! Opt-in V2 `FlatNavigation` reset command for live Steel qualification.
+//! Opt-in V2 episode reset and goal marker commands for live Steel runs.
 //!
 //! The application writes a semantic request file. Steel owns registry
 //! resolution, world mutation, and the normal player teleport/protocol path;
@@ -34,25 +34,17 @@ const GOAL_MARKER_HALF_HEIGHT: f64 = 6.0;
 const GOAL_MARKER_HORIZONTAL_SPREAD: f64 = 0.08;
 const GOAL_MARKER_VERTICAL_SPREAD: f64 = 5.5;
 const GOAL_MARKER_PARTICLE_COUNT: i32 = 32;
+const RESET_COMMAND: &str = "v2_episode_reset";
+const GOAL_MARKER_COMMAND: &str = "v2_episode_goal_marker";
 
 pub(super) fn register(registry: &mut CommandRegistry) -> Result<(), CommandRegistrationError> {
     registry.register(
-        CommandRegistration::new(
-            Identifier::from_steel("v2_flat_navigation_materialize"),
-            command,
-        )
-        .default_access(),
+        CommandRegistration::new(Identifier::from_steel(RESET_COMMAND), reset_command)
+            .default_access(),
     )?;
     registry.register(
         CommandRegistration::new(
-            Identifier::from_steel("v2_flat_navigation_prepare"),
-            prepare_command,
-        )
-        .default_access(),
-    )?;
-    registry.register(
-        CommandRegistration::new(
-            Identifier::from_steel("v2_flat_navigation_goal_marker"),
+            Identifier::from_steel(GOAL_MARKER_COMMAND),
             goal_marker_command,
         )
         .default_access(),
@@ -60,37 +52,9 @@ pub(super) fn register(registry: &mut CommandRegistry) -> Result<(), CommandRegi
     Ok(())
 }
 
-fn command() -> CommandNode {
-    literal("v2_flat_navigation_materialize")
-        .then(argument("file", CommandArgument::greedy_string()).executes(materialize))
-}
-
-fn prepare_command() -> CommandNode {
-    literal("v2_flat_navigation_prepare")
-        .then(argument("file", CommandArgument::greedy_string()).executes(prepare))
-}
-
-/// Move the requesting client close enough to load a remote preview plot.
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "Steel's command callback API passes a borrowed context"
-)]
-fn prepare(context: &CommandContext<'_>) -> Result<i32, CommandError> {
-    let player = context
-        .source()
-        .player()
-        .ok_or_else(|| CommandError::new("V2 preparation requires a player source"))?;
-    let request = read_request(required_string(*context, "file")?)?;
-    request.validate_and_resolve()?;
-    approach_plot(player, &request)?;
-    context.source().send_success(
-        &TextComponent::plain(format!(
-            "V2_FLAT_NAVIGATION_PREPARED task_id={}",
-            request.task_id
-        )),
-        false,
-    );
-    Ok(1)
+fn reset_command() -> CommandNode {
+    literal(RESET_COMMAND)
+        .then(argument("file", CommandArgument::greedy_string()).executes(reset_episode))
 }
 
 fn approach_plot(player: &Player, request: &MaterializationRequest) -> Result<(), CommandError> {
@@ -107,7 +71,7 @@ fn approach_plot(player: &Player, request: &MaterializationRequest) -> Result<()
 }
 
 fn goal_marker_command() -> CommandNode {
-    literal("v2_flat_navigation_goal_marker").then(
+    literal(GOAL_MARKER_COMMAND).then(
         argument(
             "x",
             CommandArgument::double(
@@ -174,12 +138,12 @@ fn required_double(context: CommandContext<'_>, name: &str) -> Result<f64, Comma
     clippy::trivially_copy_pass_by_ref,
     reason = "Steel's command callback API passes a borrowed context"
 )]
-fn materialize(context: &CommandContext<'_>) -> Result<i32, CommandError> {
+fn reset_episode(context: &CommandContext<'_>) -> Result<i32, CommandError> {
     let player = context
         .source()
         .player()
         .cloned()
-        .ok_or_else(|| CommandError::new("V2 materialization requires a player source"))?;
+        .ok_or_else(|| CommandError::new("V2 episode reset requires a player source"))?;
     let file = required_string(*context, "file")?;
     let request = read_request(file)?;
     let blocks = request.validate_and_resolve()?;
@@ -189,7 +153,7 @@ fn materialize(context: &CommandContext<'_>) -> Result<i32, CommandError> {
         approach_plot(&player, &request)?;
         context.source().send_success(
             &TextComponent::plain(format!(
-                "V2_FLAT_NAVIGATION_PLOT_NOT_READY task_id={}",
+                "V2_EPISODE_PLOT_NOT_READY task_id={}",
                 request.task_id
             )),
             false,
@@ -224,7 +188,7 @@ fn materialize(context: &CommandContext<'_>) -> Result<i32, CommandError> {
 
     context.source().send_success(
         &TextComponent::plain(format!(
-            "V2_FLAT_NAVIGATION_MATERIALIZED task_id={} blocks={} cleared={cleared_blocks}",
+            "V2_EPISODE_RESET task_id={} blocks={} cleared={cleared_blocks}",
             request.task_id,
             blocks.len()
         )),
